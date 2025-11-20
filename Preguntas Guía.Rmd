@@ -1,0 +1,328 @@
+---
+title: "Punto 2"
+author: "Jonathan Ortega"
+date: "2025-11-17"
+output: html_document
+---
+```{r}
+rm(list = ls())
+setwd("C:/Users/Jonat/Documents/Diplomado/tarea_mod_8/output")   # 
+load("datos_minimos_accidentes_limpio.RData")                    # 
+```
+
+
+### ¿Cuántos accidentes ocurren por mes o por año? ¿Se observan tendencias?
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(lubridate)
+library(stringr)
+dt <- as.data.table(datos_minimos_accidentes_limpio)
+
+# --- AÑOS: igual que la pasada (sin regresión/rolling) ---------------------
+dt[, year := year(fecha_del_accidente)]
+ann <- dt[, .N, by = year][order(year)]
+
+p_ann <- ggplot(ann, aes(x = year, y = N)) +
+  geom_line(size = 0.6) +
+  geom_point(size = 0.8) +
+  scale_x_continuous(breaks = pretty(ann$year, n = 8)) +
+  labs(x = "Año", y = "Número de accidentes") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(size = 10),
+    axis.text = element_text(size = 9)
+  )
+
+# --- MESES: misma versión (estadística histórica por mes: media y mediana) ---
+monthly_ts <- dt[, .N, by = .(yr = year(fecha_del_accidente), m = month(fecha_del_accidente))]
+monthly_stats <- monthly_ts[, .(
+  mean_N   = mean(N),
+  median_N = median(N),
+  sd_N     = sd(N),
+  iqr_N    = IQR(N)
+), by = m][order(m)]
+monthly_stats[, month_label := factor(m, levels = 1:12,
+  labels = c("Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"))]
+
+p_month <- ggplot(monthly_stats, aes(x = month_label)) +
+  geom_line(aes(y = mean_N, group = 1), size = 0.6) +
+  geom_point(aes(y = mean_N), size = 0.6) +
+  geom_line(aes(y = median_N, group = 1), linetype = "dashed", size = 0.6) +
+  geom_point(aes(y = median_N), size = 0.6, shape = 1) +
+  labs(x = "Mes", y = "Accidentes (estadísticas por mes)",
+       subtitle = "Línea sólida: media; línea discontinua: mediana") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+print(p_ann)
+print(p_month)
+
+
+```
+Se puede apreciar de las graficas que ha habido una disminucion de los accdidentes en México de los ultimos 28 años, siendo del 2004 al 2008 los años con mayores accidentes, en 2020 podríamos pensar que esa bajada fue por la pandemia, y ha estado estable desde 2010 aún sabiendo que cada vez hay más automoviles en el pais año con año. 
+
+Y analizando por mes, vemos que usando la media y mediana de los accidentes en esos meses en marzo, mayo y en los ultimos 3 meses del año hay más accidentes. 
+
+
+
+### ¿Qué tipo de accidente es el más común?
+
+
+```{r}
+tipo_counts <- dt[!is.na(tipo_de_accidente), .N, by = tipo_de_accidente][order(-N)]
+tipo_counts[, pct := 100 * N / sum(N)]
+
+ggplot(tipo_counts, aes(x = reorder(tipo_de_accidente, N), y = N)) +
+  geom_col(fill = "grey40") +
+  coord_flip() +
+  geom_text(aes(label = paste0(sprintf("%.1f", pct), "%")),
+            hjust = -0.02, size = 3) +
+  scale_y_continuous(
+    labels = scales::comma_format(accuracy = 1, big.mark = ","),
+    limits = c(0, max(tipo_counts$N) * 1.12),
+    expand = c(0, 0)
+  ) +
+  labs(x = NULL, y = "Accidentes") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(size = 10)
+  )
+
+
+```
+
+Se ve que el tipo de accidente que predomina es el choque con un automovil.
+
+### ¿A qué hora del día ocurren con mayor frecuencia los accidentes?
+```{r}
+library(scales)
+
+# EXTRAER HORA y CONTAR
+dt[, hour := hour(fecha_hora_accidente)]
+hour_counts <- dt[!is.na(hour), .N, by = hour][order(hour)]
+hour_counts[, pct := 100 * N / sum(N)]
+
+# GRÁFICO por hora con etiqueta % (y guardado)
+p_hour <- ggplot(hour_counts, aes(x = hour, y = N)) +
+  geom_col(fill = "grey40", width = 0.8) +
+  geom_text(aes(label = paste0(sprintf("%.1f", pct), "%")), vjust = -0.6, size = 3) +
+  scale_x_continuous(breaks = 0:23) +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1),
+                     limits = c(0, max(hour_counts$N) * 1.12)) +
+  labs(x = "Hora del día (0–23)", y = "Accidentes (conteo)",
+       subtitle = "Etiqueta = porcentaje del total") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Mostrar y guardar
+print(p_hour)
+ggsave("accidentes_por_hora.png", p_hour, width = 10, height = 5, dpi = 150)
+
+# AGRUPAR POR PERIODOS (Madrugada / Mañana / Tarde / Noche)
+periods <- function(h) {
+  cut(h, breaks = c(-1,4,11,17,23), labels = c("Madrugada","Mañana","Tarde","Noche"))
+}
+hour_counts[, period := periods(hour)]
+period_counts <- hour_counts[, .(N = sum(N)), by = period][order(-N)]
+
+# Imprimir las dos salidas en consola (últimas dos salidas)
+print(period_counts)   # tabla resumida por periodos
+```
+
+En la mañana hay más accidentes, pero es curioso como en la madruada pese a que hay menos movimientos hay gran cantidad de accidentes. 
+
+
+
+### ¿Qué grupos de edad o género son los más afectados?
+
+```{r}
+library(stringr)
+# preparar columnas base
+# edad_aproximada
+if(!("edad_aproximada" %in% names(dt))){
+  if("id_edad" %in% names(dt)) dt[, edad_aproximada := suppressWarnings(as.integer(as.character(id_edad)))]
+  else dt[, edad_aproximada := NA_integer_]
+} else {
+  dt[, edad_aproximada := suppressWarnings(as.integer(as.character(edad_aproximada)))]
+}
+
+# genero
+if(!("genero" %in% names(dt))){
+  if("sexo" %in% names(dt)) dt[, genero := as.character(sexo)] else dt[, genero := NA_character_]
+} else dt[, genero := as.character(genero)]
+
+# estado de la víctima (Fallecido / Lesionado / Ileso)
+if(!("estado_de_la_victima" %in% names(dt))){
+  # intentar reconstruir desde indicadores si existen
+  cols_m <- intersect(names(dt), c("condmuerto","pasamuerto","peatmuerto","ciclmuerto","otromuerto","nemuerto"))
+  cols_h <- intersect(names(dt), c("condherido","pasaherido","peatherido","ciclherido","otroherido","neherido"))
+  if(length(cols_m)) for(cn in cols_m) dt[, (cn) := suppressWarnings(as.integer(as.character(get(cn))))]
+  if(length(cols_h)) for(cn in cols_h) dt[, (cn) := suppressWarnings(as.integer(as.character(get(cn))))]
+  if(length(cols_m) || length(cols_h)){
+    dt[, .muertos := if(length(cols_m)) rowSums(.SD, na.rm = TRUE) else 0L, .SDcols = cols_m]
+    dt[, .heridos := if(length(cols_h)) rowSums(.SD, na.rm = TRUE) else 0L, .SDcols = cols_h]
+    dt[, estado_de_la_victima := fifelse(.muertos > 0, "Fallecido", fifelse(.heridos > 0, "Lesionado", "Ileso"))]
+    dt[, c(".muertos", ".heridos") := NULL]
+  } else {
+    dt[, estado_de_la_victima := if("clasacc" %in% names(dt)) fifelse(tolower(as.character(clasacc)) %like% "fatal|muert", "Fallecido", NA_character_) else NA_character_]
+  }
+} else dt[, estado_de_la_victima := as.character(estado_de_la_victima)]
+
+# limpieza mínima de texto
+dt[, genero := fifelse(is.na(genero) | genero=="" ,
+                       NA_character_,
+                       gsub("\\s+", " ", trimws(as.character(genero)))) ]
+dt[ , estado_de_la_victima := fifelse(is.na(estado_de_la_victima) | estado_de_la_victima=="", NA_character_, str_squish(as.character(estado_de_la_victima)) )]
+
+# crear cortes de edad
+dt[, grupo_edad := NA_character_]
+breaks <- c(-Inf,17,29,44,59,74,Inf)
+labels <- c("0-17","18-29","30-44","45-59","60-74","75+")
+dt[!is.na(edad_aproximada), grupo_edad := cut(edad_aproximada, breaks = breaks, labels = labels, right = TRUE)]
+
+# resumen por grupo de edad
+resumen_por_edad <- dt[ , .(
+  total = .N,
+  fallecidos = sum(estado_de_la_victima == "Fallecido", na.rm = TRUE),
+  lesionados  = sum(estado_de_la_victima == "Lesionado", na.rm = TRUE),
+  ilesos      = sum(estado_de_la_victima == "Ileso", na.rm = TRUE),
+  na_estado   = sum(is.na(estado_de_la_victima))
+), by = grupo_edad][order(-total)]
+resumen_por_edad[, tasa_mortalidad := ifelse(total>0, fallecidos/total, NA_real_)]
+resumen_por_edad[, tasa_lesion := ifelse(total>0, lesionados/total, NA_real_)]
+
+# resumen por género
+
+dt[!is.na(genero), genero := tolower(genero)]
+dt[genero %in% c("m","h","male","masculino"), genero := "Hombre"]
+dt[genero %in% c("f","female","femenino","mujer"), genero := "Mujer"]
+dt[genero %in% c("no especificado","ns","na","desconocido","otro"), genero := NA_character_]
+dt[!is.na(genero), genero := str_to_title(genero)]
+
+resumen_por_genero <- dt[ , .(
+  total = .N,
+  fallecidos = sum(estado_de_la_victima == "Fallecido", na.rm = TRUE),
+  lesionados  = sum(estado_de_la_victima == "Lesionado", na.rm = TRUE),
+  ilesos      = sum(estado_de_la_victima == "Ileso", na.rm = TRUE),
+  na_estado   = sum(is.na(estado_de_la_victima))
+), by = genero][order(-total)]
+resumen_por_genero[, tasa_mortalidad := ifelse(total>0, fallecidos/total, NA_real_)]
+resumen_por_genero[, tasa_lesion := ifelse(total>0, lesionados/total, NA_real_)]
+
+
+# pruebas de asociación (genero vs estado)
+test_chi_genero_estado <- NULL
+if(nrow(resumen_por_genero) > 0 && any(!is.na(dt$genero)) && any(!is.na(dt$estado_de_la_victima))){
+  tabla_ge <- table(dt$genero, dt$estado_de_la_victima, useNA = "no")
+  ok <- all(dim(tabla_ge) >= 2)
+  if(ok){
+    # intentar chi-sq; si falla o esperados pequeños, usar fisher
+    chi_ok <- tryCatch({
+      ch <- suppressWarnings(chisq.test(tabla_ge, simulate.p.value = FALSE))
+      ch
+    }, error = function(e) NULL)
+    if(is.null(chi_ok) || any(chi_ok$expected < 5)){
+      fisher_ok <- tryCatch(fisher.test(tabla_ge), error = function(e) NULL)
+      test_chi_genero_estado <- if(!is.null(fisher_ok)) list(method = "fisher", result = fisher_ok) else list(method = "chi_squared_attempt", result = chi_ok)
+    } else {
+      test_chi_genero_estado <- list(method = "chi_squared", result = chi_ok)
+    }
+  }
+}
+
+# asignar resultados al entorno global
+assign("resumen_por_edad", resumen_por_edad, envir = .GlobalEnv)
+assign("resumen_por_genero", resumen_por_genero, envir = .GlobalEnv)
+assign("test_chi_genero_estado", test_chi_genero_estado, envir = .GlobalEnv)
+
+# outputs rápidos en consola
+print(head(resumen_por_edad, 20))
+print(resumen_por_genero)
+```
+Los hombres son los que tienen tasa de mortalidad (más del doble que las mujeres) y de lesión más alta (3% más), y los más jovenes menores a 17 años son los que tienen un tasa de lesión alta del 33% y de mortalidad también más alta de 1.3%. 
+
+
+### ¿Qué causas se reportan con mayor frecuencia (velocidad, alcohol, distracción, etc.)?
+
+```{r}
+cols <- c("causa_probable_del_accidente","tipo_de_accidente","tipaccid",
+          "tipo_de_vehiculo","aliento","cinturon")
+cols <- intersect(cols, names(dt))
+
+norm_unique_map <- function(vec){
+  orig <- unique(vec)
+  orig_chr <- as.character(orig)
+  norm_vals <- iconv(tolower(trimws(orig_chr)), to = "ASCII//TRANSLIT")
+  norm_vals[is.na(norm_vals) | nchar(norm_vals) == 0] <- NA_character_
+  idx <- match(as.character(vec), orig_chr)
+  norm_vals[idx]
+}
+
+# Aplicar mapeo por columna (procesamiento pesado solo sobre únicos)
+for (c in cols) set(dt, j = c, value = norm_unique_map(dt[[c]]))
+
+# Preferir tipo_de_accidente sobre tipaccid
+dt[, tipo_acc := fifelse(!is.na(tipo_de_accidente) & tipo_de_accidente != "",
+                         tipo_de_accidente,
+                         fifelse(!is.na(tipaccid) & tipaccid != "", tipaccid, NA_character_))]
+
+# Recodificar 'se ignora' / 'desconocido' a NA para causa; para aliento/cinturon dejar NA también
+dt[causa_probable_del_accidente %in% c("se ignora","desconocido","na"), causa_probable_del_accidente := NA_character_]
+dt[aliento %in% c("se ignora","desconocido","na"), aliento := NA_character_]
+dt[cinturon %in% c("se ignora","desconocido","na"), cinturon := NA_character_]
+
+# 1) Totales por causa
+cause_tot <- dt[!is.na(causa_probable_del_accidente),
+                .(conteo = .N),
+                by = causa_probable_del_accidente][order(-conteo)]
+cause_tot[, proporcion := conteo / sum(conteo)]
+
+# 2) Top tipos de accidente dentro de cada causa (top 5)
+cause_type <- dt[!is.na(causa_probable_del_accidente) & !is.na(tipo_acc),
+                 .(N = .N),
+                 by = .(causa = causa_probable_del_accidente, tipo = tipo_acc)]
+cause_type[, pct_within := N / sum(N), by = causa]
+setorder(cause_type, causa, -N)
+top_tipo_por_causa <- cause_type[, head(.SD, 5), by = causa]
+
+# 3) Top tipos de vehículo dentro de cada causa (top 5)
+cause_veh <- dt[!is.na(causa_probable_del_accidente) & !is.na(tipo_de_vehiculo),
+                .(N = .N),
+                by = .(causa = causa_probable_del_accidente, veh = tipo_de_vehiculo)]
+cause_veh[, pct_within := N / sum(N), by = causa]
+setorder(cause_veh, causa, -N)
+top_veh_por_causa <- cause_veh[, head(.SD, 5), by = causa]
+
+# 4) Aliento / cinturón: proporción por causa (mostrar top categorías por causa)
+alc_by_cause <- dt[!is.na(causa_probable_del_accidente) & !is.na(aliento),
+                   .(N = .N), by = .(causa = causa_probable_del_accidente, aliento)]
+alc_by_cause[, pct := N / sum(N), by = causa]
+setorder(alc_by_cause, causa, -N)
+alc_by_cause_top <- alc_by_cause[, head(.SD, 5), by = causa]
+
+belt_by_cause <- dt[!is.na(causa_probable_del_accidente) & !is.na(cinturon),
+                    .(N = .N), by = .(causa = causa_probable_del_accidente, cinturon)]
+belt_by_cause[, pct := N / sum(N), by = causa]
+setorder(belt_by_cause, causa, -N)
+belt_by_cause_top <- belt_by_cause[, head(.SD, 5), by = causa]
+
+# Imprimir resultados esenciales
+print(cause_tot)
+print(top_tipo_por_causa)
+print(top_veh_por_causa)
+print(alc_by_cause_top)
+print(belt_by_cause_top)
+
+
+```
+Podemos ver que principalmente es por causa del comportamiento del conductor (~86% de causas).
+Alcohol (aliento) positivo ≈ 11%; 56% sin cinturón (que posiblemente hable más de cómo es el conductor y no una causa directa); mala condición del camino y falla del vehículo son mucho menos frecuentes (~2.4% y ~1%).
+
+
