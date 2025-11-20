@@ -1,0 +1,213 @@
+---
+title: "Untitled"
+author: "Carmen"
+date: "2025-11-17"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(scales)
+```
+
+```{r}
+load("C:/Users/carme/Downloads/Modulo_8_proyecto/output/output/datos_minimos_accidentes_limpio.RData")
+dt <- as.data.table(datos_minimos_accidentes_limpio)
+```
+
+
+```{r}
+dt[, fatal := ifelse(estado_de_la_victima == "Fallecido", 1, 0)]
+```
+
+```{r}
+# 3.1 Grupo de edad
+dt[, grupo_edad := cut(
+  edad_aproximada,
+  breaks = c(-Inf, 17, 29, 44, 59, Inf),
+  labels = c("0-17", "18-29", "30-44", "45-59", "60+")
+)]
+```
+
+```{r}
+# 3.2 Hora del día → franja horaria
+if(!inherits(dt$fecha_hora_accidente, "POSIXt")){
+  dt[, fecha_hora_accidente := as.POSIXct(fecha_hora_accidente)]
+}
+
+dt[, hora_del_dia := hour(fecha_hora_accidente)]
+
+dt[, franja := cut(
+  hora_del_dia,
+  breaks = c(-1,4,11,17,23),
+  labels = c("Madrugada","Mañana","Tarde","Noche")
+)]
+
+```
+
+```{r}
+cols_factor <- c(
+  "genero","grupo_edad","tipo_de_accidente","tipo_de_vehiculo",
+  "franja","aliento","cinturon",
+  "causa_probable_del_accidente","urbana","caparod"
+)
+
+dt[, (cols_factor) := lapply(.SD, factor), .SDcols = cols_factor]
+
+```
+
+```{r}
+# ----------------------------------------------------------
+# 4) Filtrar datos completos
+# ----------------------------------------------------------
+dt_modelo <- dt[
+  !is.na(fatal) &
+  !is.na(genero) &
+  !is.na(grupo_edad) &
+  !is.na(tipo_de_vehiculo) &
+  !is.na(tipo_de_accidente) &
+  !is.na(franja)
+]
+```
+
+```{r}
+modelo <- glm(
+  fatal ~ grupo_edad + genero + tipo_de_vehiculo + tipo_de_accidente +
+          aliento + cinturon + franja + causa_probable_del_accidente +
+          urbana + caparod,
+  data = dt_modelo,
+  family = binomial()
+)
+
+summary(modelo)
+```
+El modelo de regresión logística aplicado para estimar la probabilidad de que un accidente de tránsito resulte fatal revela un conjunto consistente y coherente de patrones sobre los factores que aumentan o disminuyen el riesgo de muerte en México. A partir de más de 9 millones de registros, los resultados permiten identificar tanto variables críticas relacionadas con el perfil de las víctimas, tipo de vehículo, naturaleza del accidente, condiciones del conductor, así como características del entorno donde ocurre el siniestro.
+
+```{r}
+dt_modelo[, prob_fatalidad := predict(modelo, type = "response")]
+```
+
+
+En primer lugar, los grupos de edad extremos concentran un mayor riesgo: los adultos mayores (60+) presentan una mayor probabilidad de fallecer, mientras que los grupos de 30–59 años muestran riesgos menores.
+
+```{r}
+# 7.1 Probabilidad por grupo de edad
+prob_edad <- dt_modelo %>%
+  group_by(grupo_edad) %>%
+  summarise(probabilidad = mean(prob_fatalidad)) %>%
+  arrange(desc(probabilidad))
+
+print(prob_edad)
+```
+
+Por su parte, el género masculino está fuertemente asociado con una mayor probabilidad de fatalidad, destacando que ser mujer disminuye considerablemente el riesgo, lo que concuerda con patrones internacionales sobre exposición al riesgo y comportamientos de conducción.
+
+```{r}
+# 7.2 Probabilidad por género
+prob_genero <- dt_modelo %>%
+  group_by(genero) %>%
+  summarise(probabilidad = mean(prob_fatalidad))
+
+print(prob_genero)
+```
+Uno de los factores más determinantes es el tipo de vehículo involucrado. Los accidentes que involucran bicicletas, motocicletas, microbuses, ómnibus, vehículos de carga y ferrocarril presentan coeficientes positivos y altamente significativos, lo que indica un riesgo sustancialmente mayor de muerte. Por el contrario, los accidentes que involucran automóviles particulares —la categoría de referencia— presentan riesgos más bajos en comparación con estas modalidades. Ello sugiere una vulnerabilidad especialmente alta en los usuarios vulnerables (ciclistas y motociclistas) y en vehículos de alto impacto (como camiones y trenes).
+
+```{r}
+# 7.3 Probabilidad por tipo de vehículo
+prob_veh <- dt_modelo %>%
+  group_by(tipo_de_vehiculo) %>%
+  summarise(probabilidad = mean(prob_fatalidad)) %>%
+  arrange(desc(probabilidad))
+
+print(prob_veh)
+```
+
+El tipo de accidente también emerge como un factor crítico. Los atropellamientos y las colisiones con ferrocarril muestran de lejos los coeficientes más altos del modelo, reflejando escenarios donde la energía del impacto y la vulnerabilidad de las víctimas son determinantes. Las colisiones con ciclistas también elevan el riesgo. Por el contrario, los choques entre vehículos automotores y las colisiones con objeto fijo presentan menor probabilidad de resultar fatales, lo que sugiere que la infraestructura del vehículo y las condiciones del entorno pueden ofrecer cierto grado de protección.
+
+```{r}
+# 7.4 Probabilidad por tipo de accidente
+prob_tipo <- dt_modelo %>%
+  group_by(tipo_de_accidente) %>%
+  summarise(probabilidad = mean(prob_fatalidad)) %>%
+  arrange(desc(probabilidad))
+
+print(prob_tipo)
+```
+
+```{r}
+# 7.5 Probabilidad por franja del día
+prob_franja <- dt_modelo %>%
+  group_by(franja) %>%
+  summarise(probabilidad = mean(prob_fatalidad))
+
+print(prob_franja)
+```
+El momento del día también tiene un papel importante. La noche presenta mayor probabilidad de fatalidad, mientras que la mañana reduce el riesgo. Esto sugiere una mezcla de factores como menor visibilidad, mayor velocidad promedio y posiblemente mayor incidencia de consumo de alcohol durante la noche.
+
+```{r}
+# Gráfica de probabilidad horario
+ggplot(prob_franja, aes(x = franja, y = probabilidad)) +
+  geom_col(fill = "steelblue") +
+  scale_y_continuous(labels = percent) +
+  labs(
+    title = "Probabilidad de fatalidad según franja horaria",
+    x = "Franja del día",
+    y = "Probabilidad"
+  ) +
+  theme_minimal()
+```
+```{r}
+# Gráfica de probabilidad por grupo de edad
+ggplot(prob_edad, aes(x = grupo_edad, y = probabilidad)) +
+  geom_col(fill = "steelblue") +
+  scale_y_continuous(labels = percent) +
+  labs(
+    title = "Probabilidad de fatalidad por grupo de edad",
+    x = "Grupo de edad",
+    y = "Probabilidad"
+  ) +
+  theme_minimal()
+```
+```{r}
+# Gráfica de probabilidad por género
+ggplot(prob_genero, aes(x = genero, y = probabilidad)) +
+  geom_col(fill = "steelblue") +
+  scale_y_continuous(labels = percent) +
+  labs(
+    title = "Probabilidad de fatalidad por género",
+    x = "Género",
+    y = "Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Gráfica de probabilidad por tipo de vehiculo
+
+ggplot(prob_veh, aes(x = reorder(tipo_de_vehiculo, probabilidad), y = probabilidad)) +
+geom_col(fill = "steelblue") +
+coord_flip() +
+scale_y_continuous(labels = percent) +
+labs(title = "Probabilidad de fatalidad por tipo de vehículo",
+x = "", y = "Probabilidad") +
+theme_minimal()
+
+```
+```{r}
+# Gráfica de probabilidad por tipo de accidente
+ggplot(prob_tipo, aes(x = reorder(tipo_de_accidente, probabilidad), y = probabilidad)) +
+geom_col(fill = "steelblue") +
+coord_flip() +
+scale_y_continuous(labels = percent) +
+labs(title = "Probabilidad de fatalidad por tipo de accidente",
+x = "", y = "Probabilidad") +
+theme_minimal()
+```
+
+## Conclusión
+
+La fatalidad en los accidentes de tránsito está fuertemente asociada a la vulnerabilidad física de la víctima (edad, género, tipo de vehículo), la naturaleza del impacto (atropellamientos, ferrocarril, motocicletas), las condiciones del conductor (alcohol, uso del cinturón), el momento del día y las condiciones del entorno.
+Estos resultados no solo describen patrones de riesgo, sino que apuntan a intervenciones prioritarias en seguridad vial, infraestructura, educación y regulación.
